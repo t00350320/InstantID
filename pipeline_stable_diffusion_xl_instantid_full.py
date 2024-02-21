@@ -513,6 +513,58 @@ def draw_kps(image_pil, kps, color_list=[(255,0,0), (0,255,0), (0,0,255), (255,2
 
     out_img_pil = PIL.Image.fromarray(out_img.astype(np.uint8))
     return out_img_pil
+
+
+def draw_kps_2(image_pil, kps,kps1, color_list=[(255,0,0), (0,255,0), (0,0,255), (255,255,0), (255,0,255)]):
+    
+    stickwidth = 4
+    limbSeq = np.array([[0, 2], [1, 2], [3, 2], [4, 2]])
+    kps = np.array(kps)
+
+    w, h = image_pil.size
+    out_img = np.zeros([h, w, 3])
+
+    for i in range(len(limbSeq)):
+        index = limbSeq[i]
+        color = color_list[index[0]]
+
+        x = kps[index][:, 0]
+        y = kps[index][:, 1]
+        length = ((x[0] - x[1]) ** 2 + (y[0] - y[1]) ** 2) ** 0.5
+        angle = math.degrees(math.atan2(y[0] - y[1], x[0] - x[1]))
+        polygon = cv2.ellipse2Poly((int(np.mean(x)), int(np.mean(y))), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
+        out_img = cv2.fillConvexPoly(out_img.copy(), polygon, color)
+    out_img = (out_img * 0.6).astype(np.uint8)
+
+    out_img1 = np.zeros([h, w, 3])
+    for i in range(len(limbSeq)):
+        index = limbSeq[i]
+        color = color_list[index[0]]
+
+        x = kps1[index][:, 0]
+        y = kps1[index][:, 1]
+        length = ((x[0] - x[1]) ** 2 + (y[0] - y[1]) ** 2) ** 0.5
+        angle = math.degrees(math.atan2(y[0] - y[1], x[0] - x[1]))
+        polygon = cv2.ellipse2Poly((int(np.mean(x)), int(np.mean(y))), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
+        out_img1 = cv2.fillConvexPoly(out_img1.copy(), polygon, color)
+    out_img1 = (out_img1 * 0.6).astype(np.uint8)
+
+    for idx_kp, kp in enumerate(kps):
+        color = color_list[idx_kp]
+        x, y = kp
+        out_img = cv2.circle(out_img.copy(), (int(x), int(y)), 10, color, -1)
+
+    for idx_kp, kp in enumerate(kps1):
+        color = color_list[idx_kp]
+        x, y = kp
+        out_img1 = cv2.circle(out_img1.copy(), (int(x), int(y)), 10, color, -1)
+
+
+    # 将两个数组的像素进行叠加
+    result_array = np.add(out_img, out_img1)
+
+    out_img_pil = PIL.Image.fromarray(result_array.astype(np.uint8))
+    return out_img_pil
     
 class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     
@@ -541,7 +593,8 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         self.set_ip_adapter(model_ckpt, num_tokens, scale)
         
     def set_image_proj_model(self, model_ckpt, image_emb_dim=512, num_tokens=16):
-        
+    #def set_image_proj_model(self, model_ckpt, image_emb_dim=1024, num_tokens=16):
+
         image_proj_model = Resampler(
             dim=1280,
             depth=4,
@@ -897,12 +950,21 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         )
         
         # 3.2 Encode image prompt
-        prompt_image_emb = self._encode_prompt_image_emb(image_embeds, 
+        prompt_image_emb = self._encode_prompt_image_emb(image_embeds[0], 
                                                          device,
                                                          num_images_per_prompt,
                                                          self.unet.dtype,
                                                          self.do_classifier_free_guidance)
+        print(f"prompt_image_emb.shape:{prompt_image_emb.shape}")
         
+        # encode person 2 emb
+        prompt_image_emb1 = self._encode_prompt_image_emb(image_embeds[1], 
+                                                         device,
+                                                         num_images_per_prompt,
+                                                         self.unet.dtype,
+                                                         self.do_classifier_free_guidance)
+        print(f"prompt_image_emb1.shape:{prompt_image_emb1.shape}")
+
         # 4. Prepare image
         if isinstance(controlnet, ControlNetModel):
             image = self.prepare_image(
@@ -949,12 +1011,15 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             mask_weight_image_tensor = mask_weight_image_tensor[None, None]
             h, w = mask_weight_image_tensor.shape[-2:]
             control_mask_wight_image_list = []
+            # make masks in different scale level
             for scale in [8, 8, 8, 16, 16, 16, 32, 32, 32]:
                 scale_mask_weight_image_tensor = F.interpolate(
                     mask_weight_image_tensor,(h // scale, w // scale), mode='bilinear')
                 control_mask_wight_image_list.append(scale_mask_weight_image_tensor)
             region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(self.unet.device, dtype=self.unet.dtype) / 255.
+            print(f"test,region_mask.shape:{region_mask.shape}")
             region_control.prompt_image_conditioning = [dict(region_mask=region_mask)]
+            print(f"test,prompt_image_conditioning:{region_control.prompt_image_conditioning}")
         else:
             control_mask_wight_image_list = None
             region_control.prompt_image_conditioning = [dict(region_mask=None)]
@@ -1037,7 +1102,13 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
         add_time_ids = add_time_ids.to(device).repeat(batch_size * num_images_per_prompt, 1)
-        encoder_hidden_states = torch.cat([prompt_embeds, prompt_image_emb], dim=1)
+        encoder_hidden_states = torch.cat([prompt_embeds, prompt_image_emb,prompt_image_emb1], dim=1)
+
+        print(f"prompt_image_emb.shape:{prompt_image_emb.shape}")
+        print(f"prompt_image_emb1.shape:{prompt_image_emb1.shape}")
+        #encoder_hidden_states.shape:torch.Size([2, 90, 2048])
+        print(f"encoder_hidden_states.shape:{encoder_hidden_states.shape}")
+        #print(f"encoder_hidden_states:{encoder_hidden_states}")
 
         # 8. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -1051,6 +1122,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                 # https://dev-discuss.pytorch.org/t/cudagraphs-in-pytorch-2-0/1428
                 if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
                     torch._inductor.cudagraph_mark_step_begin()
+                # 每次进行去噪前，准备输入的 latents 内容。根据迭代的过程，把下面计算好的 t-1 的 latents 代入进来，再次进行 t-2 时刻的计算
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
@@ -1059,6 +1131,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
                 # controlnet(s) inference
                 if guess_mode and self.do_classifier_free_guidance:
+                    print(f"test,guess_mode,do_classifier_free_guidance")
                     # Infer ControlNet only for the conditional batch.
                     control_model_input = latents
                     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
@@ -1081,12 +1154,16 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                     cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
                 if isinstance(self.controlnet, MultiControlNetModel):
+                    #print(f"test,MultiControlNetModel,len(self.controlnet.nets):{len(self.controlnet.nets)}")
                     down_block_res_samples_list, mid_block_res_sample_list = [], []
                     for control_index in range(len(self.controlnet.nets)):
                         controlnet = self.controlnet.nets[control_index]
-                        if control_index == 0:
+                        if control_index == 0 :
                             # assume fhe first controlnet is IdentityNet
                             controlnet_prompt_embeds = prompt_image_emb
+                        elif control_index == 1:
+                            # add person 2 embeds 
+                            controlnet_prompt_embeds = prompt_image_emb1
                         else:
                             controlnet_prompt_embeds = prompt_embeds
                         down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
@@ -1099,6 +1176,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                                                                                   return_dict=False)
 
                         # controlnet mask
+                        #print(f"test,control_mask_wight_image_list len:{len(control_mask_wight_image_list)}")
                         if control_index == 0 and control_mask_wight_image_list is not None:
                             down_block_res_samples = [
                                 down_block_res_sample * mask_weight
@@ -1113,6 +1191,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                     down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) for down_block_res_samples in
                                               zip(*down_block_res_samples_list)]
                 else:
+                    print(f"test,not MultiControlNetModel")
                     down_block_res_samples, mid_block_res_sample = self.controlnet(
                         control_model_input,
                         t,
@@ -1133,6 +1212,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                         mid_block_res_sample *= control_mask_wight_image_list[-1]
 
                 if guess_mode and self.do_classifier_free_guidance:
+                    print(f"test,guess_mode and self.do_classifier_free_guidance")
                     # Infered ControlNet only for the conditional batch.
                     # To apply the output of ControlNet to both the unconditional and conditional batches,
                     # add 0 to the unconditional batch to keep it unchanged.

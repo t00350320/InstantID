@@ -49,12 +49,14 @@ if __name__ == "__main__":
     face_adapter = f'./checkpoints/ip-adapter.bin'
     controlnet_path = f'./checkpoints/ControlNetModel'
     controlnet_depth_path = f'diffusers/controlnet-depth-sdxl-1.0-small'
+    controlnet_openpose_path = f'thibaud/controlnet-openpose-sdxl-1.0'
     
     # Load depth detector
     midas = MidasDetector.from_pretrained("lllyasviel/Annotators")
 
     # Load pipeline
-    controlnet_list = [controlnet_path,controlnet_path,controlnet_depth_path]
+    controlnet_list = [controlnet_path,controlnet_depth_path]
+    #controlnet_list = [controlnet_path,controlnet_path,controlnet_depth_path]
     #controlnet_list = [controlnet_path]
     controlnet_model_list = []
     for controlnet_path in controlnet_list:
@@ -64,7 +66,7 @@ if __name__ == "__main__":
     
     #base_model_path = 'stabilityai/stable-diffusion-xl-base-1.0'
         #base_model_path = 'stabilityai/stable-diffusion-xl-base-1.0'
-    base_model_path = f'/home/xxx/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots/462165984030d82259a11f4367a4eed129e94a7b'
+    base_model_path = f'/home/oppoer/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots/462165984030d82259a11f4367a4eed129e94a7b'
 
     pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
         base_model_path,
@@ -132,16 +134,22 @@ if __name__ == "__main__":
     control_mask1[y1:y2, x1:x2] = 255
     
     # create 2 face mask
-    control_mask = np.add(control_mask, control_mask1)
+    #control_mask = np.add(control_mask, control_mask1)
     
     control_mask = Image.fromarray(control_mask.astype(np.uint8))
+    control_mask1 = Image.fromarray(control_mask1.astype(np.uint8))
+
+    control_masks = []
+    control_masks.append(control_mask)
+    control_masks.append(control_mask1)
 
     image = pipe(
         prompt=prompt,
         negative_prompt=n_prompt,
         image_embeds=face_emb,
-        control_mask=control_mask,
-        image=[face_kps,face_kps1, processed_image_midas],
+        #control_mask=control_mask,
+        control_masks=control_masks,
+        image=[face_kps,face_kps1,processed_image_midas],
         controlnet_conditioning_scale=[0.8,0.8,0.8],
         ip_adapter_scale=0.8,
         num_inference_steps=30,

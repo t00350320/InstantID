@@ -180,14 +180,14 @@ class IPAttnProcessor(nn.Module):
 
         # region control
         if len(region_control.prompt_image_conditioning) == 1:
-            region_mask = region_control.prompt_image_conditioning[0].get('region_mask', None)
-            if region_mask is not None:
-                h, w = region_mask.shape[:2]
-                ratio = (h * w / query.shape[1]) ** 0.5
-                mask = F.interpolate(region_mask[None, None], scale_factor=1/ratio, mode='nearest').reshape([1, -1, 1])
-            else:
-                mask = torch.ones_like(ip_hidden_states)
-            ip_hidden_states = ip_hidden_states * mask     
+            for region_mask in region_control.prompt_image_conditioning:
+                if region_mask is not None:
+                    h, w = region_mask.shape[:2]
+                    ratio = (h * w / query.shape[1]) ** 0.5
+                    mask = F.interpolate(region_mask[None, None], scale_factor=1/ratio, mode='nearest').reshape([1, -1, 1])
+                else:
+                    mask = torch.ones_like(ip_hidden_states)
+                ip_hidden_states = ip_hidden_states * mask  
 
         hidden_states = hidden_states + self.scale * ip_hidden_states
 
@@ -372,7 +372,7 @@ class IPAttnProcessor2_0(torch.nn.Module):
         else:
             # get encoder_hidden_states, ip_hidden_states
             end_pos = encoder_hidden_states.shape[1] - self.num_tokens
-            print(f"IPAttnProcessor2_0:{encoder_hidden_states.shape[1]},self.num_tokens:{self.num_tokens},end_pos:{end_pos}")
+            #print(f"IPAttnProcessor2_0:{encoder_hidden_states.shape[1]},self.num_tokens:{self.num_tokens},end_pos:{end_pos}")
             encoder_hidden_states, ip_hidden_states = (
                 encoder_hidden_states[:, :end_pos, :],
                 encoder_hidden_states[:, end_pos:, :],

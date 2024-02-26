@@ -719,6 +719,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
 
         # Enhance Face Region
         control_mask = None,
+        control_masks = None,
 
         **kwargs,
     ):
@@ -892,6 +893,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             self.set_ip_adapter_scale(ip_adapter_scale)
 
         # 1. Check inputs. Raise error if not correct
+        '''
         self.check_inputs(
             prompt,
             prompt_2,
@@ -908,7 +910,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             control_guidance_end,
             callback_on_step_end_tensor_inputs,
         )
-
+        '''
         self._guidance_scale = guidance_scale
         self._clip_skip = clip_skip
         self._cross_attention_kwargs = cross_attention_kwargs
@@ -950,20 +952,22 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         )
         
         # 3.2 Encode image prompt
-        prompt_image_emb = self._encode_prompt_image_emb(image_embeds[0], 
-                                                         device,
-                                                         num_images_per_prompt,
-                                                         self.unet.dtype,
-                                                         self.do_classifier_free_guidance)
-        print(f"prompt_image_emb.shape:{prompt_image_emb.shape}")
-        
-        # encode person 2 emb
-        prompt_image_emb1 = self._encode_prompt_image_emb(image_embeds[1], 
-                                                         device,
-                                                         num_images_per_prompt,
-                                                         self.unet.dtype,
-                                                         self.do_classifier_free_guidance)
-        print(f"prompt_image_emb1.shape:{prompt_image_emb1.shape}")
+        prompt_image_embs = []
+        if isinstance(image_embeds, list):
+            for image_embed in image_embeds:
+                prompt_image_emb = self._encode_prompt_image_emb(image_embed, 
+                                                                 device,
+                                                                 num_images_per_prompt,
+                                                                 self.unet.dtype,
+                                                                 self.do_classifier_free_guidance)
+                prompt_image_embs.append(prompt_image_emb)
+        else:
+            prompt_image_emb = self._encode_prompt_image_emb(image_embeds, 
+                                                             device,
+                                                             num_images_per_prompt,
+                                                             self.unet.dtype,
+                                                             self.do_classifier_free_guidance)
+            prompt_image_embs.append(prompt_image_emb)   
 
         # 4. Prepare image
         if isinstance(controlnet, ControlNetModel):
@@ -1003,23 +1007,23 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             assert False
 
         # 4.1 Region control
-        if control_mask is not None:
-            mask_weight_image = control_mask
-            mask_weight_image = np.array(mask_weight_image)
-            mask_weight_image_tensor = torch.from_numpy(mask_weight_image).to(device=device, dtype=prompt_embeds.dtype)
-            mask_weight_image_tensor = mask_weight_image_tensor[:, :, 0] / 255.
-            mask_weight_image_tensor = mask_weight_image_tensor[None, None]
-            h, w = mask_weight_image_tensor.shape[-2:]
-            control_mask_wight_image_list = []
-            # make masks in different scale level
-            for scale in [8, 8, 8, 16, 16, 16, 32, 32, 32]:
-                scale_mask_weight_image_tensor = F.interpolate(
-                    mask_weight_image_tensor,(h // scale, w // scale), mode='bilinear')
-                control_mask_wight_image_list.append(scale_mask_weight_image_tensor)
-            region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(self.unet.device, dtype=self.unet.dtype) / 255.
-            print(f"test,region_mask.shape:{region_mask.shape}")
-            region_control.prompt_image_conditioning = [dict(region_mask=region_mask)]
-            print(f"test,prompt_image_conditioning:{region_control.prompt_image_conditioning}")
+        control_mask_wight_image_lists = []
+        if control_masks is not None:
+            for control_mask in control_masks:
+                mask_weight_image = control_mask
+                mask_weight_image = np.array(mask_weight_image)
+                mask_weight_image_tensor = torch.from_numpy(mask_weight_image).to(device=device, dtype=prompt_embeds.dtype)
+                mask_weight_image_tensor = mask_weight_image_tensor[:, :, 0] / 255.
+                mask_weight_image_tensor = mask_weight_image_tensor[None, None]
+                h, w = mask_weight_image_tensor.shape[-2:]
+                control_mask_wight_image_list = []
+                for scale in [8, 8, 8, 16, 16, 16, 32, 32, 32]:
+                    scale_mask_weight_image_tensor = F.interpolate(
+                        mask_weight_image_tensor,(h // scale, w // scale), mode='bilinear')
+                    control_mask_wight_image_list.append(scale_mask_weight_image_tensor)
+                region_mask = torch.from_numpy(np.array(control_mask)[:, :, 0]).to(self.unet.device, dtype=self.unet.dtype) / 255.
+                region_control.prompt_image_conditioning.append(region_mask)
+                control_mask_wight_image_lists.append(control_mask_wight_image_list)
         else:
             control_mask_wight_image_list = None
             region_control.prompt_image_conditioning = [dict(region_mask=None)]
@@ -1102,10 +1106,12 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
         add_time_ids = add_time_ids.to(device).repeat(batch_size * num_images_per_prompt, 1)
-        encoder_hidden_states = torch.cat([prompt_embeds, prompt_image_emb,prompt_image_emb1], dim=1)
+        encoder_hidden_states = prompt_embeds
+        for prompt_image_emb in prompt_image_embs:   
+            encoder_hidden_states = torch.cat([encoder_hidden_states, prompt_image_emb], dim=1)
 
         print(f"prompt_image_emb.shape:{prompt_image_emb.shape}")
-        print(f"prompt_image_emb1.shape:{prompt_image_emb1.shape}")
+        
         #encoder_hidden_states.shape:torch.Size([2, 90, 2048])
         print(f"encoder_hidden_states.shape:{encoder_hidden_states.shape}")
         #print(f"encoder_hidden_states:{encoder_hidden_states}")
@@ -1158,38 +1164,43 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                     down_block_res_samples_list, mid_block_res_sample_list = [], []
                     for control_index in range(len(self.controlnet.nets)):
                         controlnet = self.controlnet.nets[control_index]
-                        if control_index == 0 :
-                            # assume fhe first controlnet is IdentityNet
-                            controlnet_prompt_embeds = prompt_image_emb
-                        elif control_index == 1:
-                            # add person 2 embeds 
-                            controlnet_prompt_embeds = prompt_image_emb1
+                        if control_index != len(self.controlnet.nets) - 1:
+                            for index, prompt_image_emb in enumerate(prompt_image_embs):
+                                controlnet_prompt_embeds = prompt_image_emb
+                                down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
+                                                                                          t,
+                                                                                          encoder_hidden_states=controlnet_prompt_embeds,
+                                                                                          controlnet_cond=image[index],
+                                                                                          conditioning_scale=cond_scale[control_index],
+                                                                                          guess_mode=guess_mode,
+                                                                                          added_cond_kwargs=controlnet_added_cond_kwargs,
+                                                                                          return_dict=False)
+                                if len(control_mask_wight_image_lists) != 0:
+                                    down_block_res_samples = [
+                                        down_block_res_sample * mask_weight
+                                        for down_block_res_sample, mask_weight in zip(down_block_res_samples, control_mask_wight_image_lists[index])
+                                    ]
+                                    mid_block_res_sample *= control_mask_wight_image_lists[index][-1]
+                                down_block_res_samples_list.append(down_block_res_samples)
+                                mid_block_res_sample_list.append(mid_block_res_sample)
                         else:
                             controlnet_prompt_embeds = prompt_embeds
-                        down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
-                                                                                  t,
-                                                                                  encoder_hidden_states=controlnet_prompt_embeds,
-                                                                                  controlnet_cond=image[control_index],
-                                                                                  conditioning_scale=cond_scale[control_index],
-                                                                                  guess_mode=guess_mode,
-                                                                                  added_cond_kwargs=controlnet_added_cond_kwargs,
-                                                                                  return_dict=False)
-
-                        # controlnet mask
-                        #print(f"test,control_mask_wight_image_list len:{len(control_mask_wight_image_list)}")
-                        if control_index == 0 and control_mask_wight_image_list is not None:
-                            down_block_res_samples = [
-                                down_block_res_sample * mask_weight
-                                for down_block_res_sample, mask_weight in zip(down_block_res_samples, control_mask_wight_image_list)
-                            ]
-                            mid_block_res_sample *= control_mask_wight_image_list[-1]
-
-                        down_block_res_samples_list.append(down_block_res_samples)
-                        mid_block_res_sample_list.append(mid_block_res_sample)
+                            down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
+                                                                                      t,
+                                                                                      encoder_hidden_states=controlnet_prompt_embeds,
+                                                                                      controlnet_cond=image[-1],
+                                                                                      conditioning_scale=cond_scale[control_index],
+                                                                                      guess_mode=guess_mode,
+                                                                                      added_cond_kwargs=controlnet_added_cond_kwargs,
+                                                                                      return_dict=False)
+                            down_block_res_samples_list.append(down_block_res_samples)
+                            mid_block_res_sample_list.append(mid_block_res_sample)
 
                     mid_block_res_sample = torch.stack(mid_block_res_sample_list).sum(dim=0)
                     down_block_res_samples = [torch.stack(down_block_res_samples).sum(dim=0) for down_block_res_samples in
                                               zip(*down_block_res_samples_list)]
+
+
                 else:
                     print(f"test,not MultiControlNetModel")
                     down_block_res_samples, mid_block_res_sample = self.controlnet(

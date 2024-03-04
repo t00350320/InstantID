@@ -422,16 +422,16 @@ class IPAttnProcessor2_0(torch.nn.Module):
         ip_hidden_states = ip_hidden_states.to(query.dtype)
 
         # region control
-        if len(region_control.prompt_image_conditioning) == 1:
-            region_mask = region_control.prompt_image_conditioning[0].get('region_mask', None)
-            if region_mask is not None:
-                query = query.reshape([-1, query.shape[-2], query.shape[-1]])
-                h, w = region_mask.shape[:2]
-                ratio = (h * w / query.shape[1]) ** 0.5
-                mask = F.interpolate(region_mask[None, None], scale_factor=1/ratio, mode='nearest').reshape([1, -1, 1])
-            else:
-                mask = torch.ones_like(ip_hidden_states)
-            ip_hidden_states = ip_hidden_states * mask
+        if len(region_control.prompt_image_conditioning) != 0:
+            for region_mask in region_control.prompt_image_conditioning:
+                if region_mask is not None:
+                    query = query.reshape([-1, query.shape[-2], query.shape[-1]])
+                    h, w = region_mask.shape[:2]
+                    ratio = (h * w / query.shape[1]) ** 0.5
+                    mask = F.interpolate(region_mask[None, None], scale_factor=1/ratio, mode='nearest').reshape([1, -1, 1])
+                else:
+                    mask = torch.ones_like(ip_hidden_states)
+                ip_hidden_states = ip_hidden_states * mask
 
         hidden_states = hidden_states + self.scale * ip_hidden_states
 

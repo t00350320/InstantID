@@ -591,7 +591,12 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     def load_ip_adapter_instantid(self, model_ckpt, image_emb_dim=512, num_tokens=16, scale=0.5):     
         self.set_image_proj_model(model_ckpt, image_emb_dim, num_tokens)
         self.set_ip_adapter(model_ckpt, num_tokens, scale)
-        
+
+    def load_ip_adapter_sdxl(self, model_ckpt, image_emb_dim=512, num_tokens=16, scale=0.5):     
+        #self.set_image_proj_model(model_ckpt, image_emb_dim, num_tokens)
+        self.set_ip_adapter(model_ckpt, num_tokens, scale)
+
+
     def set_image_proj_model(self, model_ckpt, image_emb_dim=512, num_tokens=16):
     #def set_image_proj_model(self, model_ckpt, image_emb_dim=1024, num_tokens=16):
 
@@ -646,6 +651,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
         ip_layers.load_state_dict(state_dict)
     
     def set_ip_adapter_scale(self, scale):
+        print(f"self.unet_name:{self.unet_name}")
         unet = getattr(self, self.unet_name) if not hasattr(self, "unet") else self.unet
         for attn_processor in unet.attn_processors.values():
             if isinstance(attn_processor, IPAttnProcessor):
@@ -950,6 +956,23 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             pooled_prompt_embeds=pooled_prompt_embeds,
             negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
         )
+        print(f"prompt_embeds.shape:{prompt_embeds.shape}")
+        # 3.1.1 Encode extra input prompt
+        (
+            prompt_embeds1,
+            negative_prompt_embeds1,
+            pooled_prompt_embeds1,
+            negative_pooled_prompt_embeds1,
+        ) = lpw.get_weighted_text_embeddings_sdxl(
+            pipe=self, 
+            prompt="a beautiful flower", 
+            neg_prompt=negative_prompt,
+            #prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+        )
+        print(f"prompt_embeds1.shape:{prompt_embeds1.shape}")
         
         # 3.2 Encode image prompt
         prompt_image_embs = []
@@ -1099,17 +1122,27 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
             negative_add_time_ids = add_time_ids
 
         if self.do_classifier_free_guidance:
+            print(f"do_classifier_free_guidance")
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+            #prompt_embeds1 = torch.cat([negative_prompt_embeds, prompt_embeds1], dim=0)
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
             add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
 
         prompt_embeds = prompt_embeds.to(device)
+        #prompt_embeds1 = prompt_embeds1.to(device)
+
         add_text_embeds = add_text_embeds.to(device)
         add_time_ids = add_time_ids.to(device).repeat(batch_size * num_images_per_prompt, 1)
         encoder_hidden_states = prompt_embeds
+        print(f"encoder_hidden_states.shape:{encoder_hidden_states.shape}")
+        print(f"prompt_embeds1.shape:{prompt_embeds1.shape}")
+        #imag_extra_txt_embeds = prompt_embeds1
         for prompt_image_emb in prompt_image_embs:   
+            print(f"prompt_image_emb.shape:{prompt_image_emb.shape}")
             encoder_hidden_states = torch.cat([encoder_hidden_states, prompt_image_emb], dim=1)
-
+            #imag_extra_txt_embeds = torch.cat([imag_extra_txt_embeds, prompt_image_emb], dim=1)
+        
+        
         print(f"prompt_image_emb.shape:{prompt_image_emb.shape}")
         
         #encoder_hidden_states.shape:torch.Size([2, 90, 2048])
@@ -1188,7 +1221,7 @@ class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
                             down_block_res_samples, mid_block_res_sample = controlnet(control_model_input,
                                                                                       t,
                                                                                       encoder_hidden_states=controlnet_prompt_embeds,
-                                                                                      controlnet_cond=image[-1],
+                                                                                      controlnet_cond=image[control_index],
                                                                                       conditioning_scale=cond_scale[control_index],
                                                                                       guess_mode=guess_mode,
                                                                                       added_cond_kwargs=controlnet_added_cond_kwargs,
